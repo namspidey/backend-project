@@ -1,24 +1,41 @@
+// index.js
 const express = require('express');
-const connectDB = require('./db');
-require('dotenv').config();
+const http = require('http');
+const { Server } = require('socket.io');
 const cors = require('cors');
-const http = require('http'); // ✅ Thêm
-const { Server } = require('socket.io'); // ✅ Thêm
-const socketHandler = require('./sockets/socket'); // ✅ Thêm - tạo file này ở bước sau
+require('dotenv').config();
+
+const connectDB = require('./db'); // Hàm connect MongoDB
+const socketHandler = require('./sockets/socket'); // Xử lý realtime
 
 const app = express();
-const server = http.createServer(app); // ✅ Tạo server từ app
+const server = http.createServer(app);
 
+// Kết nối MongoDB
 connectDB();
 
+// Middleware
 app.use(express.json());
 
+// ===== CORS =====
+const allowedOrigins = [
+  'http://localhost:3000', // dev local
+  'https://frontend-project-zeta-three.vercel.app' // frontend Vercel
+];
+
 app.use(cors({
-  origin: 'http://localhost:3000',
-  credentials: true,
+  origin: function(origin, callback){
+    if(!origin) return callback(null, true); // Postman, curl
+    if(allowedOrigins.indexOf(origin) === -1){
+      const msg = 'CORS policy does not allow access from this Origin.';
+      return callback(new Error(msg), false);
+    }
+    return callback(null, true);
+  },
+  credentials: true
 }));
 
-// Routes
+// ===== Routes =====
 app.use('/api/auth', require('./routes/authRoutes'));
 app.use('/api/post', require('./routes/postRoutes'));
 app.use('/api/user', require('./routes/userRoutes'));
@@ -26,23 +43,28 @@ app.use('/api/comment', require('./routes/commentRoutes'));
 app.use('/api/chat', require('./routes/chatRoutes'));
 app.use('/api/notification', require('./routes/notificationRoutes'));
 
+// ===== Health Check =====
+app.get('/healthz', (req, res) => {
+  res.status(200).send('OK');
+});
 
-// ✅ Khởi tạo Socket.IO server
+// ===== Socket.IO =====
 const io = new Server(server, {
   cors: {
-    origin: 'http://localhost:3000',
-    methods: ['GET', 'POST']
+    origin: allowedOrigins,
+    methods: ['GET','POST'],
+    credentials: true
   }
 });
 
-// ✅ Gắn io vào global để sử dụng trong controller
+// Gắn global io
 global.io = io;
 
-// ✅ Xử lý các sự kiện realtime (setup, message, notification)
-socketHandler(io); // sẽ tạo ở bước tiếp theo
+// Xử lý các sự kiện realtime
+socketHandler(io);
 
-// ✅ Chạy server
-const PORT = process.env.PORT || 3001;
+// ===== Start Server =====
+const PORT = process.env.PORT || 5000;
 server.listen(PORT, () => {
   console.log(`🚀 Server is running on port ${PORT}`);
 });
