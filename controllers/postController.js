@@ -1,147 +1,197 @@
-// controllers/authController.js
+const Post = require('../models/Post');
 const User = require('../models/User');
-const bcrypt = require('bcryptjs');
+const Comment = require('../models/Comment');
 const jwt = require('jsonwebtoken');
-const { transporter } = require('../utils/email');
-const { redis } = require('../utils/redis');
+const { cloudinary } = require('../utils/cloudinary');
 
-// Đăng ký trực tiếp (dùng cho dev, không dùng OTP)
-exports.registerraw = async (req, res) => {
+exports.createPost = async (req, res) => {
   try {
-    const { username, fullname, email, password, dob } = req.body;
-    if (!username || !fullname || !email || !password || !dob) {
-      return res.status(400).json({ message: "Điền đầy đủ thông tin" });
+    const token = req.headers.authorization?.split(' ')[1];
+    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+
+    const caption = req.body.caption || '';
+    const files = req.files;
+
+    if (!files || files.length === 0) {
+      return res.status(400).json({ message: 'Cần ít nhất một ảnh' });
     }
 
-    const existingUser = await User.findOne({ $or: [{ username }, { email }] });
-    if (existingUser) return res.status(400).json({ message: "Username/email đã tồn tại" });
+    const imageUrls = files.map(file => file.path); // Cloudinary trả về .path là URL
 
-    const hashedPassword = await bcrypt.hash(password, 10);
-    const newUser = new User({
-      username,
-      fullname,
-      email,
-      password: hashedPassword,
-      dob: new Date(dob),
-      profilePic: "https://res.cloudinary.com/dvd8bn89o/image/upload/v1748266570/default-avatar_jv4my5.jpg"
+    const newPost = new Post({
+      user: decoded.id,
+      caption,
+      images: imageUrls,
     });
 
-    await newUser.save();
-    res.status(201).json({ message: "Đăng ký thành công" });
+    await newPost.save();
+    res.status(201).json({ message: 'Đăng bài thành công', post: newPost });
   } catch (err) {
-    console.error("registerraw error:", err);
-    res.status(500).json({ message: "Lỗi máy chủ", error: err.message });
+    res.status(500).json({ message: 'Lỗi server', error: err.message });
   }
 };
 
-// Đăng nhập
-exports.login = async (req, res) => {
+exports.deletePost = async (req, res) => {
   try {
-    const { username, password } = req.body;
-    if (!username || !password) return res.status(400).json({ message: "Điền đầy đủ thông tin" });
+    const { id } = req.params;
+    const token = req.headers.authorization?.split(' ')[1];
+    const decoded = jwt.verify(token, process.env.JWT_SECRET);
 
-    const user = await User.findOne({ username });
-    if (!user) return res.status(400).json({ message: "Không tìm thấy user" });
+    const post = await Post.findById(id);
+    if (!post) return res.status(404).json({ message: 'Không tìm thấy bài viết' });
 
-    const isMatch = await bcrypt.compare(password, user.password);
-    if (!isMatch) return res.status(400).json({ message: "Sai mật khẩu" });
-
-    const token = jwt.sign({ id: user._id }, process.env.JWT_SECRET, { expiresIn: '1d' });
-
-    res.status(200).json({
-      token,
-      user: {
-        id: user._id,
-        username: user.username,
-        fullname: user.fullname,
-        email: user.email,
-        profilePic: user.profilePic,
-      },
-    });
-  } catch (err) {
-    console.error("login error:", err);
-    res.status(500).json({ message: "Lỗi máy chủ", error: err.message });
-  }
-};
-
-// Lấy thông tin người dùng hiện tại
-exports.getMe = async (req, res) => {
-  try {
-    if (!req.user || !req.user.id) return res.status(401).json({ message: "Unauthorized" });
-
-    const user = await User.findById(req.user.id).select("-password");
-    if (!user) return res.status(404).json({ message: "User not found" });
-
-    res.json(user);
-  } catch (err) {
-    console.error("getMe error:", err);
-    res.status(500).json({ message: "Lỗi máy chủ", error: err.message });
-  }
-};
-
-// Gửi OTP
-exports.sendOtp = async (req, res) => {
-  try {
-    const { username, fullname, email, password, dob } = req.body;
-    if (!username || !fullname || !email || !password || !dob) {
-      return res.status(400).json({ message: "Điền đầy đủ thông tin" });
+    if (post.user.toString() !== decoded.id) {
+      return res.status(403).json({ message: 'Không có quyền xóa bài viết này' });
     }
 
-    const existingUser = await User.findOne({ $or: [{ username }, { email }] });
-    if (existingUser) return res.status(400).json({ message: "Username/email đã tồn tại" });
+    // Xóa ảnh từ Cloudinary
+    for (const imageUrl of post.images) {
+      const publicId = getPublicIdFromUrl(imageUrl);
+      if (publicId) {
+        await cloudinary.uploader.destroy(`insta_clone_posts/${publicId}`);
+      }
+    }
 
-    const otp = Math.floor(100000 + Math.random() * 900000).toString();
+    // 🔥 Xóa toàn bộ comment của bài viết này
+    await Comment.deleteMany({ post: post._id });
 
-    await redis.set(
-      `otp:${email}`,
-      JSON.stringify({ otp, username, fullname, password, dob }),
-      { EX: 300 } // 5 phút
-    );
+    // Xóa bài viết
+    await post.deleteOne();
 
-    await transporter.sendMail({
-      from: process.env.EMAIL_USERNAME,
-      to: email,
-      subject: 'Mã OTP xác thực',
-      html: `<p>Mã OTP của bạn là: <b>${otp}</b></p>`,
-    });
-
-    res.status(200).json({ message: "Đã gửi OTP đến email" });
+    res.status(200).json({ message: 'Đã xóa bài viết, ảnh trên Cloudinary và các bình luận' });
   } catch (err) {
-    console.error("sendOtp error:", err);
-    res.status(500).json({ message: "Lỗi máy chủ", error: err.message });
+    console.error(err);
+    res.status(500).json({ message: 'Lỗi server', error: err.message });
   }
 };
 
-// Xác minh OTP và đăng ký
-exports.register = async (req, res) => {
+// Hàm lấy publicId từ URL
+function getPublicIdFromUrl(url) {
   try {
-    const { email, otp } = req.body;
-    if (!email || !otp) return res.status(400).json({ message: "Thiếu email hoặc OTP" });
+    const parts = url.split('/');
+    const filenameWithExt = parts[parts.length - 1]; // vd: abc123.jpg
+    return filenameWithExt.replace(/\.[^/.]+$/, ''); // → abc123
+  } catch {
+    return null;
+  }
+}
 
-    const rawData = await redis.get(`otp:${email}`);
-    if (!rawData) return res.status(400).json({ message: "OTP không đúng hoặc đã hết hạn" });
+exports.likePost = async (req, res) => {
+  try {
+    const token = req.headers.authorization?.split(' ')[1];
+    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    const userId = decoded.id;
 
-    const data = JSON.parse(rawData);
-    const { otp: savedOtp, username, fullname, password, dob } = data;
+    const post = await Post.findById(req.params.postId);
+    if (!post) return res.status(404).json({ message: 'Không tìm thấy bài viết' });
 
-    if (otp !== savedOtp) return res.status(400).json({ message: "OTP không đúng hoặc đã hết hạn" });
+    if (!post.likes.includes(userId)) {
+      post.likes.push(userId);
+      await post.save();
+    }
 
-    const hashedPassword = await bcrypt.hash(password, 10);
-    const newUser = new User({
-      username,
-      fullname,
-      email,
-      password: hashedPassword,
-      profilePic: "https://res.cloudinary.com/dvd8bn89o/image/upload/v1748266570/default-avatar_jv4my5.jpg",
-      dob: new Date(dob),
-    });
-
-    await newUser.save();
-    await redis.del(`otp:${email}`);
-
-    res.status(201).json({ message: "Đăng ký thành công" });
+    res.status(200).json({ message: 'Đã like bài viết', likeCount: post.likes.length });
   } catch (err) {
-    console.error("register error:", err);
-    res.status(500).json({ message: "Lỗi máy chủ", error: err.message });
+    res.status(500).json({ message: 'Lỗi server', error: err.message });
+  }
+};
+
+exports.unlikePost = async (req, res) => {
+  try {
+    const token = req.headers.authorization?.split(' ')[1];
+    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    const userId = decoded.id;
+
+    const post = await Post.findById(req.params.postId);
+    if (!post) return res.status(404).json({ message: 'Không tìm thấy bài viết' });
+
+    post.likes = post.likes.filter(id => id.toString() !== userId);
+    await post.save();
+
+    res.status(200).json({ message: 'Đã unlike bài viết', likeCount: post.likes.length });
+  } catch (err) {
+    res.status(500).json({ message: 'Lỗi server', error: err.message });
+  }
+};
+
+exports.getFeedPosts = async (req, res) => {
+  try {
+    const token = req.headers.authorization?.split(' ')[1];
+    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    const userId = decoded.id;
+
+    const skip = parseInt(req.query.skip) || 0;
+    const limit = 5;
+
+    // Lấy danh sách người đang theo dõi + chính mình
+    const user = await User.findById(userId);
+    const followingIds = user.following.map(id => id.toString());
+    followingIds.push(userId); // Bao gồm cả bài của mình
+
+    // Lấy post
+    const posts = await Post.find({ user: { $in: followingIds } })
+      .sort({ createdAt: -1 }) // Mới nhất trước
+      .skip(skip)
+      .limit(limit)
+      .populate('user', 'username profilePic') // Lấy thêm thông tin user
+      .populate({
+        path: 'comments',
+        populate: { path: 'user', select: 'username profilePic' }
+      });
+
+    res.status(200).json(posts);
+  } catch (err) {
+    res.status(500).json({ message: 'Lỗi server', error: err.message });
+  }
+};
+
+exports.getPostDetail = async (req, res) => {
+  try {
+    const postId = req.params.id;
+
+    const post = await Post.findById(postId)
+      .populate('user', 'username profilePic') // Lấy user của bài post
+      .populate({
+        path: 'comments',
+        populate: {
+          path: 'user',
+          select: 'username profilePic' // Lấy người cmt
+        }
+      });
+
+    if (!post) {
+      return res.status(404).json({ message: 'Post không tồn tại' });
+    }
+
+    res.status(200).json(post);
+  } catch (err) {
+    res.status(500).json({ message: 'Lỗi server', error: err.message });
+  }
+};
+
+exports.getUserPosts = async (req, res) => {
+  try {
+    const { id } = req.params; // ID của user cần xem bài viết
+    const skip = parseInt(req.query.skip) || 0;
+    const limit = 6;
+
+    // Kiểm tra người dùng tồn tại
+    const user = await User.findById(id);
+    if (!user) return res.status(404).json({ message: "Người dùng không tồn tại" });
+
+    // Lấy bài viết của user (mới nhất trước), phân trang
+    const posts = await Post.find({ user: id })
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(limit)
+      .populate('user', 'username profilePic')
+      .populate({
+        path: 'comments',
+        populate: { path: 'user', select: 'username profilePic' }
+      }); // chỉ populate thông tin người đăng
+
+    res.status(200).json(posts);
+  } catch (err) {
+    res.status(500).json({ message: 'Lỗi server', error: err.message });
   }
 };
