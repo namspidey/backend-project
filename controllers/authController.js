@@ -2,9 +2,9 @@
 const User = require('../models/User');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
-const { transporter } = require('../utils/email');
+//const { transporter } = require('../utils/email');
 const { redis } = require('../utils/redis');
-
+const { sendEmail } = require("../utils/email");
 // Đăng ký trực tiếp (dùng cho dev, không dùng OTP)
 exports.registerraw = async (req, res) => {
   try {
@@ -98,10 +98,9 @@ exports.sendOtp = async (req, res) => {
       { EX: 300 } // 5 phút
     );
 
-    await transporter.sendMail({
-      from: process.env.EMAIL_USERNAME,
+    await sendEmail({
       to: email,
-      subject: 'Mã OTP xác thực',
+      subject: "Mã OTP xác thực",
       html: `<p>Mã OTP của bạn là: <b>${otp}</b></p>`,
     });
 

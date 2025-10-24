@@ -1,13 +1,25 @@
 // utils/email.js
-const nodemailer = require('nodemailer');
-require('dotenv').config();
+require("dotenv").config();
+const sgMail = require("@sendgrid/mail");
 
-const transporter = nodemailer.createTransport({
-  service: "gmail",
-  auth: {
-    user: process.env.EMAIL_USERNAME,
-    pass: process.env.EMAIL_PASSWORD,
-  },
-});
+sgMail.setApiKey(process.env.SENDGRID_API_KEY);
 
-module.exports = { transporter };
+const sendEmail = async ({ to, subject, html, text }) => {
+  const msg = {
+    to,
+    from: process.env.SENDGRID_SENDER, // địa chỉ email bạn đã verify trong SendGrid
+    subject,
+    text,
+    html,
+  };
+
+  try {
+    await sgMail.send(msg);
+    console.log(`✅ Email sent to ${to}`);
+  } catch (error) {
+    console.error("❌ SendGrid error:", error.response?.body || error.message);
+    throw new Error("Gửi email thất bại");
+  }
+};
+
+module.exports = { sendEmail };
