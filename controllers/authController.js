@@ -120,7 +120,8 @@ exports.register = async (req, res) => {
     const rawData = await redis.get(`otp:${email}`);
     if (!rawData) return res.status(400).json({ message: "OTP không đúng hoặc đã hết hạn" });
 
-    const data = JSON.parse(rawData);
+    const data = await redis.get(`otp:${email}`);
+
     const { otp: savedOtp, username, fullname, password, dob } = data;
 
     if (otp !== savedOtp) return res.status(400).json({ message: "OTP không đúng hoặc đã hết hạn" });
