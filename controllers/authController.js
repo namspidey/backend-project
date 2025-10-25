@@ -95,7 +95,7 @@ exports.sendOtp = async (req, res) => {
     await redis.set(
       `otp:${email}`,
       JSON.stringify({ otp, username, fullname, password, dob }),
-      { EX: 300 } // 5 phút
+      { ex: 300 } // ✅ 5 phút, phải là 'ex' chứ không phải 'EX'
     );
 
     await sendEmail({
