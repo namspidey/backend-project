@@ -20,7 +20,7 @@ app.use(express.json());
 // ===== CORS =====
 const allowedOrigins = [
   'http://localhost:3000', // dev local
-  'https://frontend-project-zeta-three.vercel.app' // frontend Vercel
+  'https://spidey-web-rose.vercel.app/' // frontend Vercel
 ];
 
 app.use(cors({
