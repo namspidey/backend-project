@@ -1,9 +1,9 @@
-Social Network Project - Backend
+# Social Network Project - Backend
 
 A backend API for an Instagram-like social media application, built using Node.js, Express, and MongoDB.
 Supports authentication, posts, follows, chats (realtime via Socket.io), and image uploads using Cloudinary
 
-Features
+# Features
 
 - Authentication:
 Register / Login with JWT
